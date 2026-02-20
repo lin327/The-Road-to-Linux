@@ -23,3 +23,22 @@
 4. 📜 **日志管理**：分离脚本运行日志、Nginx 服务日志，方便问题排查与日志归档
 5. ⏰ **定时任务自动化**：通过 Crontab 配置监控、备份脚本的定时执行，实现无人值守运维
 6. ⚡ **静态资源优化**：Nginx 配置静态文件缓存，提升博客访问速度
+
+## 项目流程图
+
+```mermaid
+flowchart TD
+    A[开始] --> B[环境准备 Docker + Docker Compose]
+    B --> C[创建项目目录结构]
+    C --> D[编写 docker-compose.yml]
+    D --> E[编写 Nginx 配置]
+    E --> F[编写 Shell 脚本]
+    F --> F1[服务器健康检测脚本]
+    F --> F2[MySQL 定时备份脚本]
+    F1 --> G[docker-compose up -d 一键启动]
+    F2 --> G
+    G --> H[检查服务状态]
+    H --> I[测试脚本运行]
+    I --> J[配置 Crontab 定时任务]
+    J --> K[博客正常访问 + 自动化运维完成]
+    K --> L[结束]
