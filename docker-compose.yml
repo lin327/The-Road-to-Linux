@@ -1,0 +1,81 @@
+# 移除了过时的 version 字段，消除警告
+services:
+  # MySQL服务（安全加固版）
+  mysql:
+    image: mysql:8.4.8
+    container_name: my-blog-mysql
+    restart: always
+    user: "999:999"          # 以MySQL容器内非root用户运行（UID 999）
+    read_only: true           # 根文件系统只读，提升安全性
+    tmpfs:
+      - /tmp                 # 临时目录挂载为tmpfs（可写）
+    deploy:
+      resources:
+        limits:              # 限制资源，防止DoS
+          cpus: '1.0'
+          memory: 512M
+    environment:
+      MYSQL_ROOT_PASSWORD: 123123
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: blog
+      MYSQL_PASSWORD: blog123
+    volumes:
+      - ./config/mysql:/etc/mysql/conf.d
+      - mysql-data:/var/lib/mysql  # 数据卷持久化，不受read_only影响
+    ports:
+      - "3307:3306"          # 映射到3307端口，避免与宿主机MySQL冲突
+    networks:
+      - blog-network
+    healthcheck:              # 健康检查，确保服务可用
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123123"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # WordPress服务（PHP+博客系统，安全加固版）
+  wordpress:
+    image: wordpress:php8.4-fpm
+    container_name: my-blog-wordpress
+    restart: always
+    user: "33:33"            # 以www-data用户运行（UID 33）
+    environment:
+      WORDPRESS_DB_HOST: mysql:3306
+      WORDPRESS_DB_USER: root
+      WORDPRESS_DB_PASSWORD: 123123  # 与MySQL密码保持一致
+      WORDPRESS_DB_NAME: wordpress
+    volumes:
+      - ./www:/var/www/html
+    depends_on:
+      mysql:
+        condition: service_healthy  # 等待MySQL健康检查通过再启动
+    networks:
+      - blog-network
+
+  # Nginx服务（安全加固版）
+  nginx:
+    image: nginx:1.28.0-alpine
+    container_name: my-blog-nginx
+    restart: always
+    user: "101:101"          # 以nginx用户运行（UID 101）
+    read_only: true           # 根文件系统只读
+    tmpfs:
+      - /var/cache/nginx     # 缓存目录挂载为tmpfs（可写）
+    volumes:
+      - ./config/nginx:/etc/nginx/conf.d
+      - ./www:/var/www/html
+      - ./logs/nginx:/var/log/nginx   #日志挂载
+    ports:
+      - "8080:80"            # 映射到8080端口，避免与宿主机Nginx冲突
+    depends_on:
+      - wordpress
+    networks:
+      - blog-network
+
+# 数据卷（持久化MySQL数据）
+volumes:
+  mysql-data:
+
+# 自定义网络（隔离容器通信）
+networks:
+  blog-network:
+    driver: bridge
