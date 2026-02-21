@@ -1,81 +1,123 @@
-# 移除了过时的 version 字段，消除警告
-services:
-  # MySQL服务（安全加固版）
-  mysql:
-    image: mysql:8.4.8
-    container_name: my-blog-mysql
-    restart: always
-    user: "999:999"          # 以MySQL容器内非root用户运行（UID 999）
-    read_only: true           # 根文件系统只读，提升安全性
-    tmpfs:
-      - /tmp                 # 临时目录挂载为tmpfs（可写）
-    deploy:
-      resources:
-        limits:              # 限制资源，防止DoS
-          cpus: '1.0'
-          memory: 512M
-    environment:
-      MYSQL_ROOT_PASSWORD: 123123
-      MYSQL_DATABASE: wordpress
-      MYSQL_USER: blog
-      MYSQL_PASSWORD: blog123
-    volumes:
-      - ./config/mysql:/etc/mysql/conf.d
-      - mysql-data:/var/lib/mysql  # 数据卷持久化，不受read_only影响
-    ports:
-      - "3307:3306"          # 映射到3307端口，避免与宿主机MySQL冲突
-    networks:
-      - blog-network
-    healthcheck:              # 健康检查，确保服务可用
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123123"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # WordPress服务（PHP+博客系统，安全加固版）
-  wordpress:
-    image: wordpress:php8.4-fpm
-    container_name: my-blog-wordpress
-    restart: always
-    user: "33:33"            # 以www-data用户运行（UID 33）
-    environment:
-      WORDPRESS_DB_HOST: mysql:3306
-      WORDPRESS_DB_USER: root
-      WORDPRESS_DB_PASSWORD: 123123  # 与MySQL密码保持一致
-      WORDPRESS_DB_NAME: wordpress
-    volumes:
-      - ./www:/var/www/html
-    depends_on:
-      mysql:
-        condition: service_healthy  # 等待MySQL健康检查通过再启动
-    networks:
-      - blog-network
-
-  # Nginx服务（安全加固版）
-  nginx:
-    image: nginx:1.28.0-alpine
-    container_name: my-blog-nginx
-    restart: always
-    user: "101:101"          # 以nginx用户运行（UID 101）
-    read_only: true           # 根文件系统只读
-    tmpfs:
-      - /var/cache/nginx     # 缓存目录挂载为tmpfs（可写）
-    volumes:
-      - ./config/nginx:/etc/nginx/conf.d
-      - ./www:/var/www/html
-      - ./logs/nginx:/var/log/nginx   #日志挂载
-    ports:
-      - "8080:80"            # 映射到8080端口，避免与宿主机Nginx冲突
-    depends_on:
-      - wordpress
-    networks:
-      - blog-network
-
-# 数据卷（持久化MySQL数据）
-volumes:
-  mysql-data:
-
-# 自定义网络（隔离容器通信）
+# 自定义网络：让容器间通过服务名通信，隔离网络环境
 networks:
   blog-network:
-    driver: bridge
+    driver: bridge  # 桥接网络，容器间可互相访问
+
+# 数据卷：持久化存储数据，容器删除后数据不丢失
+volumes:
+  mysql-data:      # 存储 MySQL 数据库数据
+  wordpress-data:  # 存储 WordPress 网站文件
+
+# 服务定义：包含 MySQL、WordPress、Nginx 三个核心服务
+services:
+  # 1. MySQL 数据库服务
+  mysql:
+    # 使用官方 MySQL 8 镜像（稳定版）
+    image: mysql:8
+    # 容器名称（便于管理和日志查看）
+    container_name: my-blog-mysql
+    # 环境变量：初始化数据库配置
+    environment:
+      # MySQL root 用户密码（务必修改为强密码！）
+      MYSQL_ROOT_PASSWORD: main159
+      # 创建自定义数据库（WordPress 专用）
+      MYSQL_DATABASE: wordpress
+      # 创建普通用户（最小权限原则，避免 root 直接访问）
+      MYSQL_USER: blog
+      # 普通用户密码（务必修改为强密码！）
+      MYSQL_PASSWORD: your_strong_blog_password
+      # 设置 MySQL 默认字符集（避免中文乱码）
+      MYSQL_INITDB_ARGS: "--character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci"
+    # 数据卷挂载：持久化数据库数据
+    volumes:
+      - mysql-data:/var/lib/mysql  # 核心数据挂载到自定义卷
+      - ./config/mysql:/etc/mysql/conf.d  # 自定义 MySQL 配置文件（可选）
+    # 临时目录挂载：解决 socket 锁文件权限问题
+    tmpfs:
+      - /var/run/mysqld
+    # 端口映射：仅允许本地访问（云服务器安全关键！）
+    ports:
+      - "127.0.0.1:3307:3306"  # 宿主机 3307 端口映射到容器 3306，仅本地可访问
+    # 运行用户：使用容器内 mysql 用户（UID 999），避免 root 运行
+    user: "999:999"
+    # 健康检查：确保 MySQL 完全就绪后再启动其他服务
+    healthcheck:
+      # 检查 MySQL 是否可连接
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "blog", "-pmain159"]
+      interval: 5s       # 每 5 秒检查一次
+      timeout: 5s        # 超时时间 5 秒
+      retries: 5         # 重试 5 次失败则标记为不健康
+      start_period: 30s  # 启动后等待 30 秒再开始检查
+    # 网络：加入自定义网络
+    networks:
+      - blog-network
+    # 重启策略：容器异常退出时自动重启（保障服务可用性）
+    restart: unless-stopped
+
+  # 2. WordPress 服务（PHP-FPM）
+  wordpress:
+    # 使用官方 WordPress + PHP-FPM 镜像
+    image: wordpress:php8.2-fpm
+    # 容器名称
+    container_name: my-blog-wordpress
+    # 环境变量：WordPress 数据库连接配置
+    environment:
+      # 数据库连接地址（容器服务名 + 端口）
+      WORDPRESS_DB_HOST: mysql:3306
+      # 数据库名称（与 MySQL 配置一致）
+      WORDPRESS_DB_NAME: wordpress
+      # 数据库用户（与 MySQL 配置一致）
+      WORDPRESS_DB_USER: blog
+      # 数据库密码（与 MySQL 配置一致）
+      WORDPRESS_DB_PASSWORD: your_strong_blog_password
+      # 设置 WordPress 运行时区（可选，适配国内）
+      TZ: Asia/Shanghai
+    # 数据卷挂载：持久化 WordPress 文件
+    volumes:
+      - wordpress-data:/var/www/html  # 核心文件挂载到自定义卷
+      - ./www:/var/www/html          # 宿主机目录同步（便于本地修改）
+    # 依赖关系：MySQL 健康后再启动
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # 运行用户：使用容器内 www-data 用户（UID 33），避免 root 运行
+    user: "33:33"
+    # 网络：加入自定义网络
+    networks:
+      - blog-network
+    # 重启策略
+    restart: unless-stopped
+
+  # 3. Nginx 反向代理服务
+  nginx:
+    # 使用官方 Nginx 镜像
+    image: nginx:latest
+    # 容器名称
+    container_name: my-blog-nginx
+    # 端口映射：云服务器对外提供访问
+    ports:
+      - "8080:80"  # 宿主机 8080 端口映射到容器 80（HTTP）
+      # - "443:443"  # 后续配置 HTTPS 时启用（需先申请证书）
+    # 数据卷挂载：自定义 Nginx 配置和日志
+    volumes:
+      # 挂载 WordPress 根目录（与 PHP-FPM 共享）
+      - wordpress-data:/var/www/html
+      - ./www:/var/www/html
+      # 挂载自定义 Nginx 配置文件（核心！需自行创建）
+      - ./config/nginx/conf.d:/etc/nginx/conf.d
+      # 挂载 Nginx 日志（便于排查问题）
+      - ./logs/nginx:/var/log/nginx
+    # 依赖关系：WordPress 启动后再启动 Nginx
+    tmpfs:
+      - /var/cache/nginx  #解决缓存目录权限问题
+      - /var/run/nginx   #解决pid文件写入问题
+      - /tmp          #通用临时目录
+    depends_on:
+      - wordpress
+    # 运行用户：使用容器内 nginx 用户（UID 101）
+    # user: "101:101"
+    # 网络：加入自定义网络
+    networks:
+      - blog-network
+    # 重启策略
+    restart: unless-stopped
